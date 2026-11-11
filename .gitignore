@@ -1,0 +1,14 @@
+node_modules
+.vercel
+.grok
+.tanstack
+screenshots
+artifacts
+attachments
+dist
+*.log
+.env
+.env.*
+.DS_Store
+*.tsbuildinfo
+.node_modules.lock
