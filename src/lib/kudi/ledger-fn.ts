@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
+import { confirmSandboxOrder } from "@/lib/kudi/paypal-api.server";
 import { PROVIDERS } from "@/lib/kudi/providers";
 
 const Intent = z.object({
@@ -35,20 +36,32 @@ export const recordPaypalCapture = createServerFn({ method: "POST" })
         paypalOrderId: z.string().regex(/^[A-Za-z0-9]+$/).min(8).max(40),
         usdCents: z.number().int().positive().max(5_000_000),
         title: z.string().max(80),
-        captureStatus: z.literal("COMPLETED"),
       })
       .parse(input),
   )
   .handler(async ({ data, context }) => {
     const sql = await getSql();
-    const existing = await sql<{ status: string }>`
-      select status from kudi_payments where id = ${data.id} and user_id = ${context.userId}
+    const confirmed = await confirmSandboxOrder(data.paypalOrderId);
+    if (!confirmed.ok) return confirmed;
+    if (confirmed.usdCents !== data.usdCents) {
+      return { ok: false as const, error: "The PayPal amount does not match this payment." };
+    }
+    const reused = await sql<{ id: string }>`
+      select id from kudi_payments
+      where paypal_order_id = ${data.paypalOrderId} and id <> ${data.id} and status <> 'created'
     `;
-    if (existing[0]?.status === "posted") return { ok: true as const, status: "posted" as const };
+    if (reused[0]) return { ok: false as const, error: "That PayPal order was already used." };
+    const existing = await sql<{ status: string; usd_cents: number }>`
+      select status, usd_cents from kudi_payments where id = ${data.id} and user_id = ${context.userId}
+    `;
+    if (existing[0]?.status === "posted") return { ok: true as const, status: "posted" as const, usdCents: existing[0].usd_cents };
+    if (existing[0] && existing[0].usd_cents !== confirmed.usdCents) {
+      return { ok: false as const, error: "The PayPal amount does not match this payment." };
+    }
     if (existing[0]) {
       await sql`
         update kudi_payments
-        set status = 'sandbox_approved', paypal_order_id = ${data.paypalOrderId}
+        set status = 'sandbox_approved', paypal_order_id = ${data.paypalOrderId}, usd_cents = ${confirmed.usdCents}
         where id = ${data.id} and user_id = ${context.userId} and status <> 'posted'
       `;
     } else {
@@ -59,13 +72,13 @@ export const recordPaypalCapture = createServerFn({ method: "POST" })
           ${context.userId},
           ${PROVIDERS.paypal_sandbox.id},
           'sandbox_approved',
-          ${data.usdCents},
+          ${confirmed.usdCents},
           ${data.title},
           ${data.paypalOrderId}
         )
       `;
     }
-    return { ok: true as const, status: "sandbox_approved" as const };
+    return { ok: true as const, status: "sandbox_approved" as const, usdCents: confirmed.usdCents };
   });
 
 export const markSandboxApproved = createServerFn({ method: "POST" })
@@ -96,15 +109,20 @@ export const postDemoLedger = createServerFn({ method: "POST" })
   .validator((input: unknown) => z.object({ id: z.string().min(4).max(48) }).parse(input))
   .handler(async ({ data, context }) => {
     const sql = await getSql();
-    const payment = await sql<{ status: string; usd_cents: number; title: string }>`
-      select status, usd_cents, title from kudi_payments
+    const payment = await sql<{ status: string; usd_cents: number; title: string; paypal_order_id: string | null }>`
+      select status, usd_cents, title, paypal_order_id from kudi_payments
       where id = ${data.id} and user_id = ${context.userId}
     `;
     const row = payment[0];
     if (!row) return { ok: false as const, error: "That sandbox order is not on this account." };
     if (row.status === "posted") return { ok: true as const, already: true as const, usdCents: row.usd_cents };
-    if (row.status !== "sandbox_approved") {
-      return { ok: false as const, error: "Approve the sandbox order before it can touch the demo ledger." };
+    if (row.status !== "sandbox_approved" || !row.paypal_order_id) {
+      return { ok: false as const, error: "PayPal has not confirmed this order." };
+    }
+    const confirmed = await confirmSandboxOrder(row.paypal_order_id);
+    if (!confirmed.ok) return confirmed;
+    if (confirmed.usdCents !== row.usd_cents) {
+      return { ok: false as const, error: "The PayPal amount does not match this payment." };
     }
     const ledgerId = `led_${data.id}`;
     await sql`

@@ -626,14 +626,13 @@ function PaypalSheet({ txnId }: { txnId: string }) {
           paypalOrderId: orderId,
           usdCents: cents,
           title: txn.title,
-          captureStatus: "COMPLETED",
         },
       });
       if (!result.ok) {
-        setError("PayPal captured the order, but it was not saved on this account.");
+        setError(result.error);
         return;
       }
-      approve(txn.id, orderId);
+      approve(txn.id, orderId, result.usdCents);
     } catch {
       setError("PayPal captured the order, but it was not saved on this account.");
     } finally {
@@ -679,7 +678,7 @@ function PaypalSheet({ txnId }: { txnId: string }) {
       }
     >
       <p className="text-sm text-muted">
-        PayPal sandbox checkout. Paying here does not add spendable funds. After PayPal captures the order, a separate step can post it to the demo pocket.
+        PayPal sandbox. After you pay, the server checks the order with PayPal. That still does not add spendable funds until you add it to the demo pocket.
       </p>
       <p className="mt-4 font-display text-4xl tabular-nums">{formatTxnAmount(txn)}</p>
       <p className="text-sm text-muted">{txn.fxLabel ?? formatUsd(usdCents)} · {txn.title}</p>
