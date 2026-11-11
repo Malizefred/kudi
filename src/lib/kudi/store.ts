@@ -69,7 +69,7 @@ type KudiState = {
   begin: (action: WalletAction) => { ok: true } | { ok: false; error: string };
   submitPin: (pin: string) => { ok: true } | { ok: false; error: string };
   cancelPin: () => void;
-  approvePaypal: (txnId: string) => void;
+  approvePaypal: (txnId: string, paypalOrderId?: string) => void;
   postDemo: (txnId: string) => void;
   cancelPaypal: (txnId: string) => void;
   declineRequest: (txnId: string) => void;
@@ -392,7 +392,7 @@ export const useKudi = create<KudiState>()(
         return { ok: true };
       },
       cancelPin: () => set({ pinFor: null, sheet: null, formError: null }),
-      approvePaypal: (txnId) =>
+      approvePaypal: (txnId, paypalOrderId) =>
         set((s) => {
           const txn = s.txns.find((t) => t.id === txnId);
           if (!txn || txn.status !== "pending") return s;
@@ -401,8 +401,9 @@ export const useKudi = create<KudiState>()(
               t.id === txnId
                 ? {
                     ...t,
+                    paypalOrderId: paypalOrderId || t.paypalOrderId,
                     paypalPhase: "sandbox_ok" as const,
-                    note: t.kind === "topup" ? "Sandbox approved. Not in your pocket yet." : t.note,
+                    note: t.kind === "topup" ? "PayPal captured this sandbox order. Not in your pocket yet." : t.note,
                     status: t.kind === "topup" ? ("pending" as const) : ("completed" as const),
                   }
                 : t,

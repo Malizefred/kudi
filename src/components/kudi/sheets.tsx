@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Check, ChevronLeft, Copy, Delete } from "lucide-react";
-import { markSandboxApproved, openSandboxPayment, postDemoLedger } from "@/lib/kudi/ledger-fn";
+import { openSandboxPayment, postDemoLedger, recordPaypalCapture } from "@/lib/kudi/ledger-fn";
 import {
   CCY_LIST,
   convertMinor,
@@ -18,6 +18,7 @@ import {
 import { useKudi } from "@/lib/kudi/store";
 import { Avatar, cn } from "@/components/kudi/ui";
 import { CcyChips } from "@/components/kudi/flags";
+import { PaypalCheckout } from "@/components/kudi/paypal-buttons";
 
 const NETWORKS = ["MTN", "Airtel", "Glo", "9mobile"];
 const DOLLAR_BUYS = [10, 25, 50, 100];
@@ -612,23 +613,29 @@ function PaypalSheet({ txnId }: { txnId: string }) {
   };
   const sandboxOk = txn.paypalPhase === "sandbox_ok" || txn.paypalPhase === "posted";
 
-  async function onApprove() {
+  async function onCaptured(orderId: string) {
     if (!txn) return;
     setBusy(true);
     setError(null);
     try {
-      const cents = txn.minor ?? 0;
-      if (txn.kind === "topup" && cents > 0) {
-        await openSandboxPayment({ data: { id: txn.id, usdCents: cents, title: txn.title } });
-      }
-      const result = await markSandboxApproved({ data: { id: txn.id } });
+      const cents = Math.max(1, usdCents);
+      await openSandboxPayment({ data: { id: txn.id, usdCents: cents, title: txn.title } }).catch(() => undefined);
+      const result = await recordPaypalCapture({
+        data: {
+          id: txn.id,
+          paypalOrderId: orderId,
+          usdCents: cents,
+          title: txn.title,
+          captureStatus: "COMPLETED",
+        },
+      });
       if (!result.ok) {
-        setError(result.error);
+        setError("PayPal captured the order, but it was not saved on this account.");
         return;
       }
-      approve(txn.id);
+      approve(txn.id, orderId);
     } catch {
-      setError("Sign in, then approve. This step is checked on the server.");
+      setError("PayPal captured the order, but it was not saved on this account.");
     } finally {
       setBusy(false);
     }
@@ -656,21 +663,15 @@ function PaypalSheet({ txnId }: { txnId: string }) {
       title="PayPal"
       footer={
         <div className="flex flex-col gap-2">
-          {txn.kind === "topup" && txn.paypalPhase !== "posted" ? (
-            sandboxOk ? (
+          {txn.paypalPhase !== "posted" ? (
+            sandboxOk && txn.kind === "topup" ? (
               <button type="button" disabled={busy} className="press h-12 w-full rounded-full bg-leaf text-sm font-semibold text-paper" onClick={() => void onPost()}>
                 Add to demo pocket
               </button>
-            ) : (
-              <button type="button" disabled={busy} className="press h-12 w-full rounded-full bg-leaf text-sm font-semibold text-paper" onClick={() => void onApprove()}>
-                Approve sandbox order
-              </button>
+            ) : sandboxOk ? null : (
+              <PaypalCheckout usd={usd} description={payload.purchase_units[0]?.description ?? "Kudi"} onCaptured={(orderId) => void onCaptured(orderId)} onFailed={setError} />
             )
-          ) : (
-            <button type="button" className="press h-12 w-full rounded-full bg-leaf text-sm font-semibold text-paper" onClick={() => approve(txn.id)}>
-              Mark sandbox transfer
-            </button>
-          )}
+          ) : null}
           <button type="button" className="press h-12 w-full rounded-full bg-card text-sm font-semibold" onClick={() => cancel(txn.id)}>
             Cancel
           </button>
@@ -678,16 +679,15 @@ function PaypalSheet({ txnId }: { txnId: string }) {
       }
     >
       <p className="text-sm text-muted">
-        Sandbox only. Approving does not add spendable funds. A separate step posts the amount to your demo pocket, and only after the server has the approved order.
+        PayPal sandbox checkout. Paying here does not add spendable funds. After PayPal captures the order, a separate step can post it to the demo pocket.
       </p>
       <p className="mt-4 font-display text-4xl tabular-nums">{formatTxnAmount(txn)}</p>
       <p className="text-sm text-muted">{txn.fxLabel ?? formatUsd(usdCents)} · {txn.title}</p>
       <p className="mt-3 text-xs font-semibold text-muted">Order {txn.paypalOrderId}</p>
       <p className="mt-1 text-xs font-semibold text-leaf-deep">
-        {txn.paypalPhase === "posted" ? "Posted to demo ledger" : sandboxOk ? "Sandbox approved" : "Waiting for sandbox approval"}
+        {txn.paypalPhase === "posted" ? "Posted to demo ledger" : sandboxOk ? "Captured by PayPal. Not in the pocket yet." : "Waiting for PayPal"}
       </p>
       {error ? <p className="mt-2 text-sm text-coral">{error}</p> : null}
-      <pre className="mt-2 overflow-x-auto rounded-2xl bg-ink p-3 text-xs text-on">{JSON.stringify(payload, null, 2)}</pre>
     </Frame>
   );
 }

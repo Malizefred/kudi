@@ -17,7 +17,7 @@ Built for the PayPal AI Hackathon.
 
 ## PayPal
 
-Buying dollars opens a **PayPal sandbox** order. Approving that order does not add spendable money. A separate, labelled step posts the amount to the demo dollar pocket, and only after the server has recorded the approval. The pocket is not a bank balance.
+Buying dollars opens the real **PayPal JavaScript SDK** against the sandbox. A captured order is saved on the account and does not add spendable money. A separate, labelled step posts that amount to the demo dollar pocket. The pocket is not a bank balance.
 
 Webhook credits require `KUDI_WEBHOOK_SECRET`. Unsigned webhook calls are rejected.
 

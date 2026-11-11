@@ -26,6 +26,48 @@ export const openSandboxPayment = createServerFn({ method: "POST" })
     return { ok: true as const, status: "created" };
   });
 
+export const recordPaypalCapture = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) =>
+    z
+      .object({
+        id: z.string().min(4).max(48),
+        paypalOrderId: z.string().regex(/^[A-Za-z0-9]+$/).min(8).max(40),
+        usdCents: z.number().int().positive().max(5_000_000),
+        title: z.string().max(80),
+        captureStatus: z.literal("COMPLETED"),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const sql = await getSql();
+    const existing = await sql<{ status: string }>`
+      select status from kudi_payments where id = ${data.id} and user_id = ${context.userId}
+    `;
+    if (existing[0]?.status === "posted") return { ok: true as const, status: "posted" as const };
+    if (existing[0]) {
+      await sql`
+        update kudi_payments
+        set status = 'sandbox_approved', paypal_order_id = ${data.paypalOrderId}
+        where id = ${data.id} and user_id = ${context.userId} and status <> 'posted'
+      `;
+    } else {
+      await sql`
+        insert into kudi_payments (id, user_id, provider, status, usd_cents, title, paypal_order_id)
+        values (
+          ${data.id},
+          ${context.userId},
+          ${PROVIDERS.paypal_sandbox.id},
+          'sandbox_approved',
+          ${data.usdCents},
+          ${data.title},
+          ${data.paypalOrderId}
+        )
+      `;
+    }
+    return { ok: true as const, status: "sandbox_approved" as const };
+  });
+
 export const markSandboxApproved = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: unknown) => z.object({ id: z.string().min(4).max(48) }).parse(input))
